@@ -23,7 +23,7 @@ private:
 public:
     static Log* get_instance();//获取唯一实例
     static void* worker(void* args);
-    bool init(int close_log=false, int log_buf_size= 256,int split_lines = 5000000);
+    bool init(int close_log,int log_buf_size= 256,int split_lines = 5000000);
     void run();
     void write_log(int level, const char *format, ...);
     int m_close_log; //关闭日志
@@ -51,19 +51,13 @@ Log::Log()
     //方式一初始化互斥锁和条件变量
     pthread_mutex_init(&m_mutex, NULL);
     pthread_cond_init(&m_cond,NULL);
+    //是否关闭日志
     
     //方式二初始化互斥锁和条件变量
     /*
     m_mutex=PTHREAD_MUTEX_INITIALIZER;
     m_cond=PTHREAD_COND_INITIALIZER;
     */
-
-     //创建日志线程
-    int ret = pthread_create(&m_pthread,NULL,worker,NULL);
-    assert(ret==0);
-    //分离线程
-    ret = pthread_detach(m_pthread);
-    assert(ret==0);
 
 }
 
@@ -82,7 +76,7 @@ void* Log::worker(void* args)
 }
 
 void Log::run(){
-    while (true)
+    while (!m_close_log)
     {
         pthread_mutex_lock(&m_mutex);
         while(m_log_queue.empty())
@@ -100,13 +94,20 @@ void Log::run(){
 }
 
 //异步需要设置阻塞队列的长度，同步不需要设置
-bool Log::init(int close_log, int log_buf_size, int split_lines)
-{
-    m_count = 0;
+bool Log::init(int close_log,int log_buf_size, int split_lines)
+{   
     m_close_log = close_log;
+    m_count = 0;
     m_log_buf_size= log_buf_size;
     m_split_lines = split_lines;
-    
+
+    //创建日志线程
+    int ret = pthread_create(&m_pthread,NULL,worker,NULL);
+    assert(ret==0);
+    //分离线程
+    ret = pthread_detach(m_pthread);
+    assert(ret==0);
+
     time_t t = time(NULL);
     struct tm *my_tm = localtime(&t);
     /*

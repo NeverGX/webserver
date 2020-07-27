@@ -9,6 +9,8 @@
 static heap_timer timer_lst(1024);
 static int epollfd;
 static int sigpipefd[2];//处理信号事件的管道
+static int mode=0;//0为proactor，1为reactor
+
 
 /*
 全局创造实例bug分析
@@ -69,10 +71,9 @@ int main(int argc, char* argv[]){
     const char* ip = argv[1];
     int port = atoi( argv[2] );
 
-    //初始化log日志
-    Log::get_instance()->init(); //为什么只在main内有效？
+    //初始化log日志,true为关闭日志
+    Log::get_instance()->init(true); //为什么只在main内有效？
    
-
     //设置信号掩码，在主线创建其他子线程之前调用pthread_sigmask设置好信号掩码，所有新创建的线程都会继承这个掩码
     sigset_t mask_set;
     sigset_t old_mask_set;
@@ -83,7 +84,7 @@ int main(int argc, char* argv[]){
 
     //创建线程池
     threadpool<http_conn>* pool=NULL;
-    pool = threadpool<http_conn>::create_threadpool(8,10000);
+    pool = threadpool<http_conn>::create_threadpool(8,10000,mode);
 
     //创建线程池之后在主线程恢复原来的信号掩码，用主线程处理所有信号
     pthread_sigmask(SIG_SETMASK,&old_mask_set,NULL);//SIG_SETMASK直接将信号掩码设置为_set,SIG_BLOCK时当前掩码和_set并集，
@@ -237,22 +238,39 @@ int main(int argc, char* argv[]){
             }
             else if( events[i].events & EPOLLIN )
             {
-                if( users[sockfd].read() )
+                if(0==mode)
                 {
-                    pool->append(users+sockfd);//指针首地址加sockfd
-                }
+                    if( users[sockfd].read() )
+                    {
+                        pool->append(users+sockfd);//指针首地址加sockfd
+                    }
+                    else
+                    {
+                        users[sockfd].close_conn();
+                        if(users[sockfd].m_timer)  timer_lst.del_timer(users[sockfd].m_timer);
+                    }
+                }   
                 else
                 {
-                    users[sockfd].close_conn();
-                    if(users[sockfd].m_timer)  timer_lst.del_timer(users[sockfd].m_timer);
+                    users[sockfd].m_state=0;
+                    pool->append(users+sockfd);//指针首地址加sockfd
                 }
+                
             }
             else if( events[i].events & EPOLLOUT )
             {
-                if( !users[sockfd].write() )
+                if(0==mode)
                 {
-                    users[sockfd].close_conn();
-                     if(users[sockfd].m_timer)  timer_lst.del_timer(users[sockfd].m_timer);
+                    if( !users[sockfd].write() )
+                    {
+                        users[sockfd].close_conn();
+                        if(users[sockfd].m_timer)  timer_lst.del_timer(users[sockfd].m_timer);
+                    }
+                }
+                else
+                {
+                    users[sockfd].m_state=1;
+                    pool->append(users+sockfd);//指针首地址加sockfd
                 }
             }
            

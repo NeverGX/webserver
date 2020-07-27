@@ -13,17 +13,17 @@
 template <class T>
 class threadpool{
 private:
-    threadpool(int thread_number,int max_requests);
+    threadpool(int thread_number,int max_requests, int mode);
 public:
     ~threadpool(){delete []m_threads;}//析构函数一定不能私有，不然delete操作符无法访问
     //单例模式创建实例
     //这里是静态成员函数的原因，构造函数私有就无法创建对象实例，普通函数又只能通过对象名字调用，而静态成员函数能够通过类名直接调用
-    static threadpool<T>* create_threadpool(int thread_number,int max_requests)
+    static threadpool<T>* create_threadpool(int thread_number,int max_requests, int mode)
     {
       
         if(!m_instance)
         {
-        m_instance=new threadpool<T>(thread_number,max_requests);
+        m_instance=new threadpool<T>(thread_number,max_requests,mode);
         }
         return m_instance;
     }
@@ -39,6 +39,7 @@ private:
     //私有静态指针变量指向唯一实例
     static threadpool<T>* m_instance;//静态成员函数没有this指针，因此无法访问普通成员变量，因此这里实例只能是静态的
 
+    int m_mode;//ator or proactor
     int m_thread_number;//线程池的线程数
     int m_max_requests;//请求队列中允许的最大请求数
     pthread_t* m_threads;//描述线程池的数组，线程id
@@ -53,8 +54,8 @@ template <class T>//私有静态变量也无法在外面进行访问，不过可
 threadpool<T>* threadpool<T>::m_instance=NULL;//静态成员变量要在外面定义，普通成员变量不能再类外定义，注意定义要前面加上数据类型
 
 template <class T>
-threadpool<T>::threadpool(int thread_number,int max_requests):
-m_thread_number(thread_number),m_max_requests(max_requests),m_threads(NULL),m_stop(false)
+threadpool<T>::threadpool(int thread_number,int max_requests, int mode):
+m_thread_number(thread_number),m_max_requests(max_requests),m_mode(mode),m_threads(NULL),m_stop(false)
 {
     if( (thread_number<=0) || (max_requests<=0) ) throw std::exception();
     m_threads = new pthread_t[m_thread_number];
@@ -120,8 +121,36 @@ void threadpool<T>::run()
         } 
         m_locker.unlock();
         if(!request) continue;
-        request->process();
-        
+
+        //proactor模式
+        if(0==m_mode)
+        {
+            request->process();
+        }
+        else
+        {
+            //reactor模式 
+            if(0==request->m_state)//为读
+            {
+                if( request->read() )
+                {
+                    request->process();
+                }
+                else
+                {
+                    request->close_conn();
+                    //if(request->m_timer)  timer_lst.del_timer(request->m_timer);
+                }
+            }
+            else//否则为写
+            {
+                if( !request->write() )
+                {
+                    request->close_conn();
+                    //if(request->m_timer)  timer_lst.del_timer(request->m_timer);
+                }
+            }
+        }
     }
 }
 

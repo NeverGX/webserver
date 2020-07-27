@@ -14,7 +14,7 @@ const char* error_404_title = "Not Found";
 const char* error_404_form = "The requested file was not found on this server.\n";
 const char* error_500_title = "Internal Error";
 const char* error_500_form = "There was an unusual problem serving the requested file.\n";
-const char* root_dir = "/home/wangkh/cpp_ex/Mywebserver/root";
+const char* root_dir = "/home/wangkh/cpp_ex/webserver/root";//存放请求资源的目录
 
 class http_conn
 {
@@ -87,6 +87,8 @@ public:
     static int m_epollfd;
     static int m_user_count;
     Timer* m_timer;//定时器
+    int m_state;  //状态读为0，写为1
+    int m_mode;
 
 private:
     int m_sockfd;
@@ -147,7 +149,7 @@ void http_conn::init( int sockfd, const sockaddr_in& addr, Timer *timer)
     m_timer=timer;
     addfd( m_epollfd, sockfd,true,true);
     m_user_count++;
-
+    m_state = 0;//状态为读
     init();
 }
 
@@ -637,11 +639,10 @@ void http_conn::process()
     }
 
     bool write_ret = process_write( read_ret );
-    if ( ! write_ret )
+    if ( !write_ret )
     {
         close_conn();
     }
-
     modfd( m_epollfd, m_sockfd, EPOLLOUT );
 }
 
