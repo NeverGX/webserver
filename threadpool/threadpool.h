@@ -7,38 +7,38 @@
 #include <cstdio>
 #include <exception>
 #include <pthread.h>
+#include <memory> 
 #include "../lock/locker.h"
 
-//如果主线程先结束，然后main函数结束，调用了exit()结束了进程，那么所有子线程也都退出了
+/*
+类成员函数是被放在代码区,而类的静态成员变量在类定义时就已经在全局数据区分配了内存,因而它是属于类的,我们是使用这个类静态成员变量的一个拷贝.
+对于非静态成员变量,我们是在类的实例化过程中(构造对象)才在栈区为其分配内存,是为每个对象生成一个拷贝,所以它是属于对象的. 
+*/
+
+/*
+BUG：undefined reference to `threadpool<http_conn>::create_threadpool(int, int, int)'
+解析：C++带有模板的类的代码只能写在头文件！！
+模板类的实现代码，编译它的时候因为不知道套用什么参数，实际上没有任何有用的内容存在于.o文件当中。
+而在使用模板类的地方指定了类型参数，编译器这才开始根据模板代码产生有用的.o编码，可是这些内容放在了使用模板的代码产生的.o文件当中。
+如果使用模板代码的时候，通过include包含“看不到”模板的实现代码，这些所有的缺失，到链接阶段就无法完成。
+*/
+
 template <class T>
 class threadpool{
 private:
-    threadpool(int thread_number,int max_requests, int mode);
+    threadpool(int thread_number,int max_requests, int mode);//构造函数私有
 public:
-    ~threadpool(){delete []m_threads;}//析构函数一定不能私有，不然delete操作符无法访问
+   ~threadpool();//单例模式析构函数设为私有起到保护其不被delete,但是设为私有又不能被智能指针delete了
     //单例模式创建实例
     //这里是静态成员函数的原因，构造函数私有就无法创建对象实例，普通函数又只能通过对象名字调用，而静态成员函数能够通过类名直接调用
-    static threadpool<T>* create_threadpool(int thread_number,int max_requests, int mode)
-    {
-      
-        if(!m_instance)
-        {
-        m_instance=new threadpool<T>(thread_number,max_requests,mode);
-        }
-        return m_instance;
-    }
-
+    static std::shared_ptr<threadpool<T>> create_threadpool(int thread_number,int max_requests, int mode);
     bool append(T *request);
     void run();
     void stop();
-
 private:
-
     static void* worker(void* args);//worker必须是静态函数的原因，如果是普通成员函数就会有this指针，这样就有两个参数，pthread_create就会出错
-
-    //私有静态指针变量指向唯一实例
-    static threadpool<T>* m_instance;//静态成员函数没有this指针，因此无法访问普通成员变量，因此这里实例只能是静态的
-
+    //智能指针解决内存泄漏，设为私有防止外界访问
+    static std::shared_ptr<threadpool<T>> m_instance_ptr;//静态成员函数没有this指针，因此无法访问普通成员变量，因此这里实例只能是静态的
     int m_mode;//ator or proactor
     int m_thread_number;//线程池的线程数
     int m_max_requests;//请求队列中允许的最大请求数
@@ -51,7 +51,37 @@ private:
 };
 
 template <class T>//私有静态变量也无法在外面进行访问，不过可以在外面进行定义
-threadpool<T>* threadpool<T>::m_instance=NULL;//静态成员变量要在外面定义，普通成员变量不能再类外定义，注意定义要前面加上数据类型
+std::shared_ptr<threadpool<T>> threadpool<T>::m_instance_ptr=nullptr;//静态成员变量要在外面定义，普通成员变量不能再类外定义，注意定义要前面加上数据类型
+
+template <class T>
+std::shared_ptr<threadpool<T>> threadpool<T>::create_threadpool(int thread_number,int max_requests, int mode)
+    {
+        if(m_instance_ptr==nullptr)
+        {
+            threadpool<T>* tmp= new threadpool<T>(thread_number,max_requests,mode);
+            m_instance_ptr = std::shared_ptr<threadpool<T>>(tmp);
+        }
+        return m_instance_ptr;
+    }
+
+template <class T>
+void* threadpool<T>::worker(void* args)
+{
+    /*
+    Bug：这里为什么用threadpool<T>::m_instance_ptr->run()会产生Segmentation fault (core dumped)错误
+    解析：此时正在执行构造函数，还没有返回赋值给静态成员变量m_instance_ptr（静态成员变量和函数为整个类共有）
+    因此此时m_instance_ptr还是空指针，执行threadpool<T>::m_instance_ptr->run()命令时自然会发生段错误
+    */
+    ((threadpool<T>*)(args))->run();
+    //threadpool<T>::m_instance_ptr->run();
+    return NULL;
+}
+
+template <class T>
+threadpool<T>::~threadpool()
+{
+    delete []m_threads;
+}
 
 template <class T>
 threadpool<T>::threadpool(int thread_number,int max_requests, int mode):
@@ -89,13 +119,6 @@ bool threadpool<T>::append(T* request)
     //m_sem.post();////信号量方式
 
     return true;
-}
-
-template <class T>
-void* threadpool<T>::worker(void* args)
-{
-    ((threadpool<T>*)args)->run();
-    return NULL;
 }
 
 template <class T>

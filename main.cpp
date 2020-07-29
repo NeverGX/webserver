@@ -1,4 +1,3 @@
-#include "./log/log.h"
 #include "./http_conn/http_conn.h"
 #include "./threadpool/threadpool.h"
 
@@ -11,20 +10,20 @@ static int epollfd;
 static int sigpipefd[2];//处理信号事件的管道
 static int mode=0;//0为proactor，1为reactor
 
+/*
+用GDB检测段错误(Segmentation fault (core dumped))发生的位置
+1.执行ulimit -c unlimited语句后再运行a.out就会生成core文件
+2.用gdb来调试core文件：gdb a.out core
+3.在gdb字符界面中敲“where”查看更详细信息。
+*/
 
 /*
-全局创造实例bug分析
+全局区创造实例bug分析
 例1：
 Log* log=Log::get_instance();
 log->init()//error: expected constructor, destructor, or type conversion
-例2:
-void print()
-{
-    printf("1\n");
-}
-print();//error: expected constructor, destructor, or type conversion
-解析：C++程序的基本单元是函数，也就是说语句都要写在函数体内。一般来说，除了预编译，结构体、类的声明外，只有对全局变量或静态变量赋初值的语句可以写在函数体外。
-即只有在花括号之内才可以执行程序语句!!!
+解析：C++程序的基本单元是函数，也就是说语句都要写在函数体内。一般来说，除了预编译，结构体、类的声明外，
+只有对全局变量或静态变量赋初值的语句可以写在函数体外。即只有在花括号之内才可以执行程序语句!!!
 */
 
 void addsig( int sig, sighandler_t handler, bool restart = true )
@@ -83,8 +82,7 @@ int main(int argc, char* argv[]){
     pthread_sigmask(SIG_SETMASK,&mask_set,&old_mask_set);//屏蔽所有子线程的信号，保存原来的信号掩码
 
     //创建线程池
-    threadpool<http_conn>* pool=NULL;
-    pool = threadpool<http_conn>::create_threadpool(8,10000,mode);
+    std::shared_ptr<threadpool<http_conn>> pool= threadpool<http_conn>::create_threadpool(8,10000,mode);
 
     //创建线程池之后在主线程恢复原来的信号掩码，用主线程处理所有信号
     pthread_sigmask(SIG_SETMASK,&old_mask_set,NULL);//SIG_SETMASK直接将信号掩码设置为_set,SIG_BLOCK时当前掩码和_set并集，
@@ -121,7 +119,7 @@ int main(int argc, char* argv[]){
     epoll_event events[ MAX_EVENT_NUMBER ];
     epollfd = epoll_create( 5 );
     assert( epollfd != -1 );
-    addfd_LT( epollfd, listenfd, false, true);//采用非阻塞模式从listenfd中取出连接,addfd_是LT模式
+    addfd_LT( epollfd, listenfd, false, true);//采用非阻塞模式从listenfd中取出连接,addfd_是LT模式,防止accept时对端发送rst导致全连接失效阻塞
     
     //设置用户的epollfd
     http_conn::m_epollfd = epollfd;
@@ -285,7 +283,6 @@ int main(int argc, char* argv[]){
     close( listenfd );
     delete [] users;
     pool->stop();
-    delete pool;
     return 0;
 
 }
