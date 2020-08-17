@@ -119,7 +119,7 @@ int main(int argc, char* argv[]){
     epoll_event events[ MAX_EVENT_NUMBER ];
     epollfd = epoll_create( 5 );
     assert( epollfd != -1 );
-    addfd_LT( epollfd, listenfd, false, true);//采用非阻塞模式从listenfd中取出连接,addfd_是LT模式,防止accept时对端发送rst导致全连接失效阻塞
+    addfd_LT( epollfd, listenfd, false, true);//采用非阻塞模式从listenfd中取出连接,addfd_是LT模式,防止accept时对端发送RST导致全连接失效阻塞
     
     //设置用户的epollfd
     http_conn::m_epollfd = epollfd;
