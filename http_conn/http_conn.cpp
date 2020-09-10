@@ -525,5 +525,5 @@ void http_conn::process()
     {
         close_conn();
     }
-    modfd( m_epollfd, m_sockfd, EPOLLOUT );
+    modfd( m_epollfd, m_sockfd, EPOLLOUT );//处理完要写的数据后，注册写事件
 }

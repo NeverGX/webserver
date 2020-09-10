@@ -76,14 +76,10 @@ int main(int argc, char* argv[]){
     //设置信号掩码，在主线创建其他子线程之前调用pthread_sigmask设置好信号掩码，所有新创建的线程都会继承这个掩码
     sigset_t mask_set;
     sigset_t old_mask_set;
-    sigemptyset(&mask_set);
-    sigemptyset(&old_mask_set);
     sigfillset(&mask_set);
     pthread_sigmask(SIG_SETMASK,&mask_set,&old_mask_set);//屏蔽所有子线程的信号，保存原来的信号掩码
-
     //创建线程池
     std::shared_ptr<threadpool<http_conn>> pool= threadpool<http_conn>::create_threadpool(8,10000,mode);
-
     //创建线程池之后在主线程恢复原来的信号掩码，用主线程处理所有信号
     pthread_sigmask(SIG_SETMASK,&old_mask_set,NULL);//SIG_SETMASK直接将信号掩码设置为_set,SIG_BLOCK时当前掩码和_set并集，
 
@@ -96,6 +92,7 @@ int main(int argc, char* argv[]){
     http_conn* users=new http_conn[MAX_FD];
 
     //socket创建常规流程
+    //Linux内核2.6.17后，type参数可以接受下面两个相与SOCK_NONBLOCK和SOCK_CLOEXEC，分别表示设置为非阻塞，以及fork时在子进程中关闭该socket
     int listenfd = socket( PF_INET, SOCK_STREAM, 0 );
     assert( listenfd >= 0 );
 
@@ -119,8 +116,15 @@ int main(int argc, char* argv[]){
     epoll_event events[ MAX_EVENT_NUMBER ];
     epollfd = epoll_create( 5 );
     assert( epollfd != -1 );
-    addfd_LT( epollfd, listenfd, false, true);//采用非阻塞模式从listenfd中取出连接,addfd_是LT模式,防止accept时对端发送RST导致全连接失效阻塞
-    
+    addfd_LT( epollfd, listenfd, false, true);//采用非阻塞模式和LT模式
+    /*为什么要将listenfd设置为非阻塞
+    客户通过connect向TCP服务器发起三次握手
+    三次握手完成后，触发TCP服务器监听套接字的可读事件，IO复用返回（select、poll、epoll_wait）
+    客户通过RST报文取消连接
+    TCP服务器调用accept接受连接，此时发现内核已连接队列为空（因为唯一的连接已被客户端取消）
+    程序阻塞在accept调用，无法响应其它已连接套接字的事件
+    */
+
     //设置用户的epollfd
     http_conn::m_epollfd = epollfd;
 
@@ -139,6 +143,11 @@ int main(int argc, char* argv[]){
     while( !stop )
     {
         int number = epoll_wait( epollfd, events, MAX_EVENT_NUMBER, -1 );
+        /*
+        如果程序在执行处于阻塞状态的系统调用时接收到信号，并为该信号设置了信号处理函数，
+        则默认情况下系统调用将被中断，并且errno设置为EINTR。可以用sigaction函数为信号
+        设置SA_RESTART标志以重启被该信号中断的系统调用。
+        */
         if ( ( number < 0 ) && ( errno != EINTR ) )
         {
             printf( "epoll failure\n" );
