@@ -116,13 +116,20 @@ int main(int argc, char* argv[]){
     epoll_event events[ MAX_EVENT_NUMBER ];
     epollfd = epoll_create( 5 );
     assert( epollfd != -1 );
-    addfd_LT( epollfd, listenfd, false, true);//采用非阻塞模式和LT模式
-    /*为什么要将listenfd设置为非阻塞
+    addfd( epollfd, listenfd, false, true);//采用非阻塞模式和LT模式
+    /*为什么要将listenfd设置为非阻塞?
     客户通过connect向TCP服务器发起三次握手
     三次握手完成后，触发TCP服务器监听套接字的可读事件，IO复用返回（select、poll、epoll_wait）
     客户通过RST报文取消连接
     TCP服务器调用accept接受连接，此时发现内核已连接队列为空（因为唯一的连接已被客户端取消）
     程序阻塞在accept调用，无法响应其它已连接套接字的事件
+    */
+
+    /*为何epoll的ET模式一定要设置为非阻塞IO?
+    ET模式下每次write或read需要循环write或read直到返回EAGAIN错误。
+    以读操作为例，这是因为ET模式只在socket描述符状态发生变化时才触发事件，如果不一次把socket内核缓冲区的数据读完，
+    会导致socket内核缓冲区中即使还有一部分数据，该socket的可读事件也不会被触发
+    根据上面的讨论，若ET模式下使用阻塞IO，则程序一定会阻塞在最后一次write或read操作，因此说ET模式下一定要使用非阻塞IO
     */
 
     //设置用户的epollfd
@@ -137,16 +144,21 @@ int main(int argc, char* argv[]){
     //定时
     alarm(TIMESLOT);
     bool timeout=false;
-
     bool stop=false; 
 
     while( !stop )
     {
+        /*
+        epoll_create会在内核的高速cache区域中建立一棵红黑树以及就绪链表(该链表存储已经就绪的文件描述符)
+        用户执行的epoll_ctl()添加文件描述符会在红黑树上增加相应的结点，同时也注册了相应的回调函数 
+        内核在检测到某文件描述符可读/可写的时候会调用回调函数，该回调函数将fd放在就绪链表中。
+        为什么使用红黑树？方便查找、插入和删除。
+        */
         int number = epoll_wait( epollfd, events, MAX_EVENT_NUMBER, -1 );
         /*
         如果程序在执行处于阻塞状态的系统调用时接收到信号，并为该信号设置了信号处理函数，
         则默认情况下系统调用将被中断，并且errno设置为EINTR。可以用sigaction函数为信号
-        设置SA_RESTART标志以重启被该信号中断的系统调用。
+        设置SA_RESTART标志以重启被该信号中断的系统调用。包括select、poll、epoll。
         */
         if ( ( number < 0 ) && ( errno != EINTR ) )
         {
@@ -165,15 +177,16 @@ int main(int argc, char* argv[]){
                 memset(&client_address,0,sizeof(client_address));
                 socklen_t client_addrlength = sizeof( client_address );
                 
-                /*压测BUG解析
-                ET模式下需要循环读取直到eagain，否则压测会出bug,因为ET模式下只有新数据来的时候才会通知，高并发情况下，
-                一次性来了很多连接，但是只通知了一次，取出一个连接后就不再取了，此时全连接队列就一个空位，而且只有新连接
-                来后才会通知，而新连接来之后全连接队列又满了，导致全连接队列经常处于满状态，从而导致半连接队列也一直满，无法接受新连接。
+                /*
+                压测BUG解析
+                ET模式下需要循环读取直到eagain，否则压测会出bug。高并发情况下，连接过多会造成全连接队列变满，
+                但是ET模式下只有新连接到来的时候才会通知一次(epoll_wait函数返回前来多个新数据也只通知一次)，
+                而且一次只取一个连接，导致全连接队列经常处于满状态，同时新的连接也不会到来。
                 解决办法：
                 1.ET模式下需要循环读取直到eagain
                 2.listenfd采用LT模式
                 */
-            
+
                 //accept每次都返回未被使用的最小的文件描述符，因此一个连接断开后其文件描述符可以复用，因此可以用数组来描述用户
                 int connfd = accept( listenfd, ( struct sockaddr* )&client_address, &client_addrlength );
                 if ( connfd < 0 )
@@ -181,7 +194,7 @@ int main(int argc, char* argv[]){
                     /*
                     if( errno == EAGAIN || errno == EWOULDBLOCK )
                     {
-                        break;//ET模式下读取为空再跳出
+                        break;
                     }
                     */
                     printf( "errno is: %d\n", errno );
@@ -293,5 +306,4 @@ int main(int argc, char* argv[]){
     delete [] users;
     pool->stop();
     return 0;
-
 }
